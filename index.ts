@@ -142,7 +142,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
       if (profileName) {
         selectedProfileCredentials = await getCredentials(
           profiles[profileName],
-          profileName
+          profileName,
+          profiles
         );
         selectedProfile = profileName;
         selectedProfileRegion = region || "us-east-1";
@@ -167,7 +168,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request, c) => {
       );
     } else if (name === "select-profile") {
       const { profile, region } = SelectProfileSchema.parse(args);
-      const credentials = await getCredentials(profiles[profile], profile);
+      const credentials = await getCredentials(
+        profiles[profile],
+        profile,
+        profiles
+      );
       selectedProfile = profile;
       selectedProfileCredentials = credentials;
       selectedProfileRegion = region || "us-east-1";
@@ -233,66 +238,86 @@ async function listCredentials() {
 
 async function getCredentials(
   creds: any,
-  profileName: string
+  profileName: string,
+  profiles: any
 ): Promise<AWS.Credentials | AWS.SSO.RoleCredentials | any> {
+  let ssoStartUrl: string;
+  let ssoRegion: string;
+
   if (creds.sso_start_url) {
-    const region = creds.region || "us-east-1";
-    const ssoStartUrl = creds.sso_start_url;
-    const oidc = new AWS.SSOOIDC({ region });
+    ssoStartUrl = creds.sso_start_url;
+    ssoRegion = creds.region || "us-east-1";
+  } else if (creds.sso_session) {
+    const ssoSessionName = creds.sso_session;
+    const ssoSessionConfig = profiles[ssoSessionName];
 
-    const registration = await oidc
-      .registerClient({ clientName: "chatwithcloud", clientType: "public" })
-      .promise();
-
-    const auth = await oidc
-      .startDeviceAuthorization({
-        clientId: registration.clientId!,
-        clientSecret: registration.clientSecret!,
-        startUrl: ssoStartUrl,
-      })
-      .promise();
-
-    // open this in URL browser
-    if (auth.verificationUriComplete) {
-      open(auth.verificationUriComplete);
+    if (!ssoSessionConfig) {
+      throw new Error(
+        `SSO session '${ssoSessionName}' not found in configuration`
+      );
     }
 
-    let handleId: NodeJS.Timeout;
-    return new Promise((resolve) => {
-      handleId = setInterval(async () => {
-        try {
-          const createTokenReponse = await oidc
-            .createToken({
-              clientId: registration.clientId!,
-              clientSecret: registration.clientSecret!,
-              grantType: "urn:ietf:params:oauth:grant-type:device_code",
-              deviceCode: auth.deviceCode,
-            })
-            .promise();
+    if (!ssoSessionConfig.sso_start_url) {
+      throw new Error(`SSO session '${ssoSessionName}' missing sso_start_url`);
+    }
 
-          const sso = new AWS.SSO({ region });
-
-          const credentials = await sso
-            .getRoleCredentials({
-              accessToken: createTokenReponse.accessToken!,
-              accountId: creds.sso_account_id,
-              roleName: creds.sso_role_name,
-            })
-            .promise();
-
-          clearInterval(handleId);
-
-          return resolve(credentials.roleCredentials!);
-        } catch (error) {
-          if ((error as Error).message !== null) {
-            // terminal.error(error);
-          }
-        }
-      }, 2500);
-    });
+    ssoStartUrl = ssoSessionConfig.sso_start_url;
+    ssoRegion = ssoSessionConfig.sso_region || creds.region || "us-east-1";
   } else {
     return useAWSCredentialsProvider(profileName);
   }
+
+  const oidc = new AWS.SSOOIDC({ region: ssoRegion });
+
+  const registration = await oidc
+    .registerClient({ clientName: "chatwithcloud", clientType: "public" })
+    .promise();
+
+  const auth = await oidc
+    .startDeviceAuthorization({
+      clientId: registration.clientId!,
+      clientSecret: registration.clientSecret!,
+      startUrl: ssoStartUrl,
+    })
+    .promise();
+
+  if (auth.verificationUriComplete) {
+    open(auth.verificationUriComplete);
+  }
+
+  let handleId: NodeJS.Timeout;
+  return new Promise((resolve) => {
+    handleId = setInterval(async () => {
+      try {
+        const createTokenReponse = await oidc
+          .createToken({
+            clientId: registration.clientId!,
+            clientSecret: registration.clientSecret!,
+            grantType: "urn:ietf:params:oauth:grant-type:device_code",
+            deviceCode: auth.deviceCode,
+          })
+          .promise();
+
+        const sso = new AWS.SSO({ region: ssoRegion });
+
+        const credentials = await sso
+          .getRoleCredentials({
+            accessToken: createTokenReponse.accessToken!,
+            accountId: creds.sso_account_id,
+            roleName: creds.sso_role_name,
+          })
+          .promise();
+
+        clearInterval(handleId);
+
+        return resolve(credentials.roleCredentials!);
+      } catch (error) {
+        if ((error as Error).message !== null) {
+          // terminal.error(error);
+        }
+      }
+    }, 2500);
+  });
 }
 
 export const useAWSCredentialsProvider = (
