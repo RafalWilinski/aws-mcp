@@ -22,6 +22,7 @@ const codePrompt = `Your job is to answer questions about AWS environment by wri
 - Code should be handling errors gracefully, especially when doing multiple SDK calls (e.g. when mapping over an array). Each error should be handled and logged with a reason, script should continue to run despite errors
 - DO NOT require or import "aws-sdk", it is already available as "AWS" variable
 - Access to 3rd party libraries apart from "aws-sdk" is not allowed or possible
+- For base64 encoding, use btoa() function instead of Buffer (Buffer is not available in this environment)
 - Data returned from AWS-SDK must be returned as JSON containing only the minimal amount of data that is needed to answer the question. All extra data must be filtered out
 - Code MUST "return" a value: string, number, boolean or JSON object. If code does not return anything, it will be considered as FAILED
 - Whenever tool/function call fails, retry it 3 times before giving up with an improved version of the code based on the returned feedback
